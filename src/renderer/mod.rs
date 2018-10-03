@@ -409,6 +409,7 @@ impl Batch {
         &mut self,
         cell: &RenderableCell,
         glyph: &Glyph,
+        fakebold: bool,
     ) {
         if self.is_empty() {
             self.tex = glyph.tex_id;
@@ -437,6 +438,40 @@ impl Batch {
             bg_b: f32::from(cell.bg.b),
             bg_a: cell.bg_alpha,
         });
+
+        if fakebold {
+            /*
+             * Mimic what xterm does with bold fonts: overstrike the existing
+             * glyph, offset by one pixel to the right.
+             */
+            self.instances.push(InstanceData {
+                col: (cell.column.0 as f32) + 0.15,
+                row: cell.line.0 as f32,
+
+                top: glyph.top,
+                left: glyph.left,
+                width: glyph.width,
+                height: glyph.height,
+
+                uv_bot: glyph.uv_bot,
+                uv_left: glyph.uv_left,
+                uv_width: glyph.uv_width,
+                uv_height: glyph.uv_height,
+
+                r: f32::from(cell.fg.r),
+                g: f32::from(cell.fg.g),
+                b: f32::from(cell.fg.b),
+
+                /*
+                 * Use a transparent background to prevent obscuring the first
+                 * instance of the character.
+                 */
+                bg_r: 0 as f32,
+                bg_g: 0 as f32,
+                bg_b: 0 as f32,
+                bg_a: 0 as f32,
+            });
+        }
     }
 
     #[inline]
@@ -803,13 +838,13 @@ impl<'a> RenderApi<'a> {
     }
 
     #[inline]
-    fn add_render_item(&mut self, cell: &RenderableCell, glyph: &Glyph) {
+    fn add_render_item(&mut self, cell: &RenderableCell, glyph: &Glyph, fakebold: bool) {
         // Flush batch if tex changing
         if !self.batch.is_empty() && self.batch.tex != glyph.tex_id {
             self.render_batch();
         }
 
-        self.batch.add_item(cell, glyph);
+        self.batch.add_item(cell, glyph, fakebold);
 
         // Render batch and clear if it's full
         if self.batch.full() {
@@ -825,9 +860,12 @@ impl<'a> RenderApi<'a> {
         where I: Iterator<Item=&'b RenderableCell>
     {
         for cell in cells {
+            let mut fakebold = false;
+
             // Get font key for cell
             // FIXME this is super inefficient.
             let font_key = if cell.flags.contains(cell::Flags::BOLD) {
+                fakebold = true;
                 glyph_cache.bold_key
             } else if cell.flags.contains(cell::Flags::ITALIC) {
                 glyph_cache.italic_key
@@ -849,7 +887,7 @@ impl<'a> RenderApi<'a> {
             // Add cell to batch
             {
                 let glyph = glyph_cache.get(glyph_key, self);
-                self.add_render_item(&cell, glyph);
+                self.add_render_item(&cell, glyph, fakebold);
             }
 
             // FIXME This is a super hacky way to do underlined text. During
@@ -863,7 +901,7 @@ impl<'a> RenderApi<'a> {
                 };
 
                 let underscore = glyph_cache.get(glyph_key, self);
-                self.add_render_item(&cell, underscore);
+                self.add_render_item(&cell, underscore, fakebold);
             }
         }
     }
